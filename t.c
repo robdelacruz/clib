@@ -30,8 +30,8 @@ typedef struct {
     u64 cap;
 } Arena;
 #define ARENA(p, cap) ((Arena){p, 0, cap})
-#define PushStruct(a, v) PushBytes(a, sizeof(v))
-#define PushStructs(a, v, n) PushBytes(a, sizeof(v)*n)
+#define PushStruct(a, v) PushBytes(a, sizeof(v), NULL)
+#define PushStructs(a, v, n) PushBytes(a, sizeof(v)*n, NULL)
 #define ResetArena(a) {a->pos = 0;}
 
 typedef struct {
@@ -48,12 +48,14 @@ typedef struct {
 } StringList;
 #define STRINGLIST(p, cap) ((StringList){p, 0, cap})
 
-void *PushBytes(Arena *a, u64 size)
+void *PushBytes(Arena *a, u64 size, void *src)
 {
     if (a->pos + size > a->cap)
         panic("PushBytes() hit cap limit"); 
 
     char *p = a->base + a->pos;
+    if (src)
+        memcpy(p, src, size);
     a->pos += size;
     return p;
 }
@@ -62,9 +64,8 @@ String PushCString(Arena *a, char *sz)
 {
     String str;
     u32 sz_len = strlen(sz);
-    str.bs = PushBytes(a, sz_len);
+    str.bs = PushBytes(a, sz_len, sz);
     str.len = sz_len;
-    memcpy(str.bs, sz, sz_len);
     return str;
 }
 
@@ -72,9 +73,35 @@ String PushDupString(Arena *a, String src)
 {
     String str;
     str.len = src.len;
-    str.bs = PushBytes(a, src.len);
-    memcpy(str.bs, src.bs, src.len);
+    str.bs = PushBytes(a, src.len, src.bs);
     return str;
+}
+
+char *CString(Arena *a, String str)
+{
+    char *sz = PushBytes(a, str.len+1, NULL);
+    memcpy(sz, str.bs, str.len);
+    sz[str.len] = 0;
+    return sz;
+}
+
+char *CStaticString(String str)
+{
+    static char g_sz[1024];
+
+    // Copy sz bytes into static storage (not thread-safe)
+    int ncopy = str.len;
+    if (ncopy > sizeof(g_sz)-1)
+        ncopy = sizeof(g_sz)-1;
+    memcpy(g_sz, str.bs, ncopy);
+    g_sz[ncopy] = 0;
+
+    return g_sz;
+}
+
+double StringToFloat(Arena a, String str)
+{
+    return atof(CString(&a, str));
 }
 
 void StringListAppend(StringList *ss, String str)
@@ -115,8 +142,7 @@ StringList StringSplit(Arena *a, String str, String sep)
         else
             slen = isep - istart;
 
-        tmpstr.bs = PushBytes(a, slen);
-        memcpy(tmpstr.bs, str.bs + istart, slen);
+        tmpstr.bs = PushBytes(a, slen, str.bs + istart);
         tmpstr.len = slen;
         StringListAppend(&ss, tmpstr);
 
@@ -144,21 +170,31 @@ int main(int argc, char *argv[])
     printf("str1: '%.*s' len: %d\n", str1.len, str1.bs, str1.len);
     printf("str2: '%.*s' len: %d\n", str2.len, str2.bs, str2.len);
 
-    printf("scratch: pos: %ld\n", scratch.pos);
-    PushBytes(&scratch, 10);
-    printf("scratch: pos: %ld\n", scratch.pos);
-    PushBytes(&scratch, 120);
-    printf("scratch: pos: %ld\n", scratch.pos);
+    printf("scratch: pos: %lld\n", scratch.pos);
+    PushBytes(&scratch, 10, NULL);
+    printf("scratch: pos: %lld\n", scratch.pos);
+    PushBytes(&scratch, 120, NULL);
+    printf("scratch: pos: %lld\n", scratch.pos);
     PushStruct(&scratch, String);
-    printf("scratch: pos: %ld\n", scratch.pos);
+    printf("scratch: pos: %lld\n", scratch.pos);
 
-    String newstr1 = PushCString(&scratch, "new string");
-    String newstr2 = PushCString(&scratch, "another new string");
+    String newstr1 = PushCString(&scratch, "new string abcdefghijklmnop");
+    String newstr2 = PushCString(&scratch, "another new string + more characters");
     String newstr3 = PushDupString(&scratch, newstr2);
     newstr3.bs[0] = '1';
-    printf("scratch: pos: %ld\n", scratch.pos);
+    printf("scratch: pos: %lld\n", scratch.pos);
 
     foo(newstr1, newstr2, newstr3);
+
+    char *sz1 = CString(&scratch, newstr1);
+    printf("sz1: '%s'\n", sz1);
+    char *sz2 = CString(&scratch, newstr2);
+    printf("sz2: '%s'\n", sz2);
+    char *sz2a = CStaticString(newstr2);
+    printf("sz2a: '%s'\n", sz2a);
+    newstr3.bs[0] = '2';
+    char *sz3 = CStaticString(newstr3);
+    printf("sz3: '%s'\n", sz3);
 
     String str3 = LSTRING("abc; 123;;789;");
     String sep = LSTRING(";");
@@ -166,15 +202,21 @@ int main(int argc, char *argv[])
     for (int i=0; i < ss.len; i++) {
         String str = ss.base[i];
         printf("ss[%d]: '%.*s'\n", i, str.len, str.bs);
-
     }
+
+    str1 = PushCString(&scratch, "123.45");
+    double f1 = StringToFloat(scratch, str1);
+    str2 = PushCString(&scratch, "2025.01");
+    double f2 = StringToFloat(scratch, str2);
+    printf("StringToFloat '%s' ==> %.2f\n", CStaticString(str1), f1);
+    printf("StringToFloat '%s' ==> %.2f\n", CStaticString(str2), f2);
 }
 
 void foo(String s1, String s2, String s3)
 {
-    printf("s1: '%.*s' len: %ld\n", s1.len, s1.bs, s1.len);
-    printf("s2: '%.*s' len: %ld\n", s1.len, s2.bs, s2.len);
-    printf("s3: '%.*s' len: %ld\n", s1.len, s3.bs, s3.len);
+    printf("s1: '%.*s' len: %d\n", s1.len, s1.bs, s1.len);
+    printf("s2: '%.*s' len: %d\n", s1.len, s2.bs, s2.len);
+    printf("s3: '%.*s' len: %d\n", s1.len, s3.bs, s3.len);
 }
 
 
