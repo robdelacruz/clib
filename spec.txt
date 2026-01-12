@@ -1,0 +1,16 @@
+
+char *CStaticString(String str)
+{
+    static char g_sz[1024];
+
+    // Copy sz bytes into static storage (not thread-safe)
+    int ncopy = str.len;
+    if (ncopy > sizeof(g_sz)-1)
+        ncopy = sizeof(g_sz)-1;
+    memcpy(g_sz, str.bs, ncopy);
+    g_sz[ncopy] = 0;
+
+    return g_sz;
+}
+
+
