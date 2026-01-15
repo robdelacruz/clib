@@ -35,7 +35,7 @@ typedef struct {
 
 #define MAKE_ARENA(name, cap) \
     char _buf_ ## name[cap]; \
-    Arena name = (Arena){_buf_ name, 0, cap}
+    Arena name = (Arena){_buf_ ## name, 0, cap}
 #define PushStruct(a, v) PushBytes(a, sizeof(v), NULL)
 #define PushStructs(a, v, n) PushBytes(a, sizeof(v)*n, NULL)
 #define ResetArena(a) {a->pos = 0;}
